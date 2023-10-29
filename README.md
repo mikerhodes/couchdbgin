@@ -9,6 +9,7 @@ The basic idea runs as follows:
 1. Index every field in the document as a separate row in a view. Every row
    contains both the path within the JSON and the value at that path as an entry
    in a complex array key in the view.
+
 2. When querying, the query such as `{"a": {"b": {"$eq": "foo"}}}` is converted
    into a path in the index, `["a", "b", "foo"]`. We can then get all the
    documents with that key.
@@ -19,6 +20,26 @@ demonstrate this with:
 1. A `map` function that emits the path + value as the array appropriately.
 2. A client side translation layer that creates the appropriate query(s) on the
    index.
+
+## Index example
+
+For this JSON document:
+
+```json
+{
+  "a": 12,
+  "b": { "c": "foo" }
+}
+```
+
+This is indexed as the two complex keys:
+
+```
+["a", 12]
+["b", "c", "foo"]
+```
+
+## More complex query examples
 
 As a more complex example, a query that is of the form `a = foo AND b = bar`,
 where `a` and `b` are top level fields in the index, can be carried out with two
@@ -76,5 +97,4 @@ we'd not be able to do them at all.
 ## References
 
 - [Azure Cosmos schema-free indexes](https://www.vldb.org/pvldb/vol8/p1668-shukla.pdf)
-
--[CockroachDB inverted indexes](https://github.com/cockroachdb/cockroach/blob/master/docs/RFCS/20171020_inverted_indexes.md)
+- [CockroachDB inverted indexes](https://github.com/cockroachdb/cockroach/blob/master/docs/RFCS/20171020_inverted_indexes.md)
