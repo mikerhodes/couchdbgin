@@ -1,4 +1,5 @@
 doc = {
+  "_id": "234-23423-efsd-234",
   "person": {
     "age": 12,
     "name": { "first": "mike", "second": "rhodes", "words": true },
@@ -44,6 +45,7 @@ function map(x) {
     if (x.constructor === Object) {
       const r = [];
       Object.keys(x).forEach((k) => {
+        if (k.startsWith("_")) return;
         const v = paths(x[k]);
         v.forEach((subpath) => {
           subpath.unshift(k);
