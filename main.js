@@ -94,48 +94,59 @@ db.put(ddoc).then(function () {
   // some error (maybe a 409, because it already exists?)
 });
 
+// eqQuery queries our general index (gin) for
+// a field with a specific value. Use dotted field
+// for deep query.
+eqQuery = function (field, value) {
+  const key = field.split(".");
+  key.push(value);
+  // Query for foo = 22
+  db.query("my_index/gin", {
+    key: key,
+  }).then(function (res) {
+    res.rows.forEach((row) => {
+      console.log(row);
+    });
+  }).catch(function (err) {
+    // some error
+  });
+};
+
+gteQuery = function (field, value) {
+  const startkey = field.split(".");
+  startkey.push(value);
+  const endkey = field.split(".");
+  endkey.push({});
+
+  db.query("my_index/gin", {
+    startkey: startkey,
+    endkey: endkey,
+  }).then(function (res) {
+    res.rows.forEach((row) => {
+      console.log(row);
+    });
+  }).catch(function (err) {
+    // some error
+  });
+};
+
 db.put(doc).catch((ex) => {
   console.log(ex.status);
 });
 
-// Query for exact matches on the Rhodes family
-db.query("my_index/gin", {
-  key: ["person", "name", "second", "rhodes"],
-}).then(function (res) {
-  res.rows.forEach((row) => {
-    console.log(row);
-  });
-}).catch(function (err) {
-  // some error
-});
+console.log("Query for exact matches on the Rhodes family");
+eqQuery("person.name.second", "rhodes");
 
 db.post({ "foo": 12, "bar": "up" });
 db.post({ "foo": 22, "bar": "down" });
 db.post({ "foo": 32, "bar": "up" });
 db.post({ "foo": 42, "bar": "down" });
-db.post({ "foo": 42, "bar": "up" });
+db.post({ "foo": 52, "bar": "up" });
 
-// Query for foo = 22
-db.query("my_index/gin", {
-  key: ["foo", 22],
-}).then(function (res) {
-  res.rows.forEach((row) => {
-    console.log(row);
-  });
-}).catch(function (err) {
-  // some error
-});
+console.log("Query for exact matches on foo = 22");
+eqQuery("foo", 22);
 
-// Query for foo >= 22
-db.query("my_index/gin", {
-  startkey: ["foo", 22],
-  endkey: ["foo", {}],
-}).then(function (res) {
-  res.rows.forEach((row) => {
-    console.log(row);
-  });
-}).catch(function (err) {
-  // some error
-});
+console.log("Query for matches on foo >= 22");
+gteQuery("foo", 22);
 
 // A simple AND foo >= 22 and bar = up
