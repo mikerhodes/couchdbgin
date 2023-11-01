@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "pouchdb": "^8.0.1",
+    "pouchdb-adapter-memory": "^8.0.1"
+  }
+}
