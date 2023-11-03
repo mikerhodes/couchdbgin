@@ -110,90 +110,142 @@ db.put(ddoc).then(function () {
 }).catch(function (err) {
   // some error (maybe a 409, because it already exists?)
 });
-// eqQuery queries our general index (gin) for
-// a field with a specific value. Use dotted field
-// for deep query.
-eqQuery = async function (field, value) {
-  const key = field.split(".").map((x) => fk(x));
-  key.push(value);
-  // console.log(key);
 
-  const res = await db.query("my_index/gin", {
-    key: key,
-  });
-  // res.rows.forEach((row) => {
-  //   console.log(row);
-  // });
-  return res.rows.map((x) => x["id"]);
+// eqPredicate queries our general index (gin) for
+// a field with a specific value. Use dotted field
+// for deep query. It assumes the "my_index/gin"
+// index above.
+eqPredicate = function (field, value) {
+  const self = this;
+  this.field = field;
+  this.value = value;
+
+  this.execute = async function () {
+    const key = field.split(".").map((x) => fk(x));
+    key.push(value);
+
+    const res = await db.query("my_index/gin", {
+      key: key,
+    });
+    return res.rows.map((x) => x["id"]);
+  };
 };
 
-gteQuery = async function (field, value) {
-  startkey = field.split(".").map((x) => fk(x));
-  startkey.push(value);
-  endkey = field.split(".").map((x) => fk(x));
-  endkey.push({});
+// gtePredicate can execute a greater-than-or-equal-to
+// query on the database. It assumes the "my_index/gin"
+// index above.
+gtePredicate = function (field, value) {
+  const self = this;
+  this.field = field;
+  this.value = value;
 
-  // console.log(startkey);
-  // console.log(endkey);
+  this.execute = async function () {
+    startkey = field.split(".").map((x) => fk(x));
+    startkey.push(value);
+    endkey = field.split(".").map((x) => fk(x));
+    endkey.push({});
 
-  const res = await db.query("my_index/gin", {
-    startkey: startkey,
-    endkey: endkey,
-  });
-  // res.rows.forEach((row) => {
-  //   console.log(row);
-  // });
-  return res.rows.map((x) => x["id"]);
+    const res = await db.query("my_index/gin", {
+      startkey: startkey,
+      endkey: endkey,
+    });
+    return res.rows.map((x) => x["id"]);
+  };
 };
 
 db.put(doc).catch((ex) => {
   console.log(ex.status);
 });
 
-eqQuery("person.name.second", "rhodes").then((people) => {
+(new eqPredicate("person.name.second", "rhodes")).execute().then((people) => {
   console.log("Query for exact matches on the Rhodes family");
   console.log(people);
 });
 
 db.post({ "_id": "foo12BarUp", "foo": 12, "bar": "up" });
 db.post({ "_id": "foo22BarDown", "foo": 22, "bar": "down" });
+db.post({ "_id": "foo22BarUp", "foo": 22, "bar": "up" });
 db.post({ "_id": "foo32BarUp", "foo": 32, "bar": "up" });
 db.post({ "_id": "foo42BarDown", "foo": 42, "bar": "down" });
 db.post({ "_id": "foo52BarUp", "foo": 52, "bar": "up" });
 
-eqQuery("foo", 22).then((results) => {
+(new eqPredicate("foo", 22)).execute().then((results) => {
   console.log("Query for exact matches on foo = 22");
   console.log(results);
 });
 
-gteQuery("foo", 22).then((results) => {
+(new gtePredicate("foo", 22)).execute().then((results) => {
   console.log("Query for matches on foo >= 22");
   console.log(results);
 });
 
-fooAndBar = async function () {
-  const fooIds = await gteQuery("foo", 22);
-  const barIds = new Set(await eqQuery("bar", "up"));
-
-  const intersection = fooIds.filter((x) => barIds.has(x));
-
-  return intersection;
+//
+// AND
+//
+and = function (...preds) {
+  const self = this;
+  this.preds = preds;
+  this.execute = async function () {
+    const preds = self.preds;
+    if (preds.length == 0) {
+      return [];
+    } else {
+      let intersection = await preds[0].execute();
+      for (const pred of preds.slice(1)) {
+        if (intersection.length == 0) {
+          // bail early, no chance of results
+          return intersection;
+        }
+        const newIds = new Set(await pred.execute());
+        intersection = intersection.filter((x) => newIds.has(x));
+      }
+      return intersection;
+    }
+  };
 };
-fooAndBar().then((results) => {
+(new and(
+  new gtePredicate("foo", 22),
+  new eqPredicate("bar", "up"),
+)).execute().then((results) => {
   console.log("A simple AND foo >= 22 and bar = up");
-  console.log(results);
+  console.log(results.sort());
 });
 
-fooOrBar = async function () {
-  const fooIds = await gteQuery("foo", 42);
-  const barIds = await eqQuery("bar", "up");
-
-  const union = new Set(fooIds);
-  barIds.forEach((x) => union.add(x));
-
-  return union;
+//
+// OR
+//
+or = function (...preds) {
+  const self = this;
+  this.preds = preds;
+  this.execute = async function () {
+    const union = new Set();
+    for (const pred of self.preds) {
+      (await pred.execute()).forEach((id) => union.add(id));
+    }
+    return Array.from(union);
+  };
 };
-fooOrBar().then((results) => {
+(new or(
+  new gtePredicate("foo", 42),
+  new eqPredicate("bar", "up"),
+)).execute().then((results) => {
   console.log("A simple OR foo >= 42 OR bar = up");
+  console.log(results.sort());
+});
+
+//
+// Multi-clause query
+//
+(new and(
+  new or(
+    new gtePredicate("foo", 42),
+    new eqPredicate("bar", "up"),
+  ),
+  new and(
+    new gtePredicate("foo", 22),
+    new eqPredicate("bar", "up"),
+  ),
+)).execute().then((results) => {
+  console.log("(foo >= 42 OR bar = up) AND (foo >= 22 AND bar = up)");
   console.log(results);
 });
