@@ -13,7 +13,23 @@ const doc = {
   "pets": ["alice", "bob", "eve"],
 };
 
+// fk creates a "field key" for the index, which is an
+// object that sorts after any values a matching field
+// prefix may have.
+const fk = function (x) {
+  const fieldKey = {};
+  fieldKey[x] = null;
+  return fieldKey;
+};
+
 function map(x) {
+  // Duplicate the fk function so can be used from the PouchDB
+  // context.
+  const fk = function (x) {
+    const fieldKey = {};
+    fieldKey[x] = null;
+    return fieldKey;
+  };
   // paths returns an array of arrays of the ["key", "path", "value"]
   // for the value x passed in.
   const paths = function (x) {
@@ -48,7 +64,8 @@ function map(x) {
         if (k.startsWith("_")) return;
         const v = paths(x[k]);
         v.forEach((subpath) => {
-          subpath.unshift(k);
+          // fields are objects in indexes
+          subpath.unshift(fk(k));
           r.push(subpath);
         });
       });
@@ -93,60 +110,90 @@ db.put(ddoc).then(function () {
 }).catch(function (err) {
   // some error (maybe a 409, because it already exists?)
 });
-
 // eqQuery queries our general index (gin) for
 // a field with a specific value. Use dotted field
 // for deep query.
-eqQuery = function (field, value) {
-  const key = field.split(".");
+eqQuery = async function (field, value) {
+  const key = field.split(".").map((x) => fk(x));
   key.push(value);
-  // Query for foo = 22
-  db.query("my_index/gin", {
+  // console.log(key);
+
+  const res = await db.query("my_index/gin", {
     key: key,
-  }).then(function (res) {
-    res.rows.forEach((row) => {
-      console.log(row);
-    });
-  }).catch(function (err) {
-    // some error
   });
+  // res.rows.forEach((row) => {
+  //   console.log(row);
+  // });
+  return res.rows.map((x) => x["id"]);
 };
 
-gteQuery = function (field, value) {
-  const startkey = field.split(".");
+gteQuery = async function (field, value) {
+  startkey = field.split(".").map((x) => fk(x));
   startkey.push(value);
-  const endkey = field.split(".");
+  endkey = field.split(".").map((x) => fk(x));
   endkey.push({});
 
-  db.query("my_index/gin", {
+  // console.log(startkey);
+  // console.log(endkey);
+
+  const res = await db.query("my_index/gin", {
     startkey: startkey,
     endkey: endkey,
-  }).then(function (res) {
-    res.rows.forEach((row) => {
-      console.log(row);
-    });
-  }).catch(function (err) {
-    // some error
   });
+  // res.rows.forEach((row) => {
+  //   console.log(row);
+  // });
+  return res.rows.map((x) => x["id"]);
 };
 
 db.put(doc).catch((ex) => {
   console.log(ex.status);
 });
 
-console.log("Query for exact matches on the Rhodes family");
-eqQuery("person.name.second", "rhodes");
+eqQuery("person.name.second", "rhodes").then((people) => {
+  console.log("Query for exact matches on the Rhodes family");
+  console.log(people);
+});
 
-db.post({ "foo": 12, "bar": "up" });
-db.post({ "foo": 22, "bar": "down" });
-db.post({ "foo": 32, "bar": "up" });
-db.post({ "foo": 42, "bar": "down" });
-db.post({ "foo": 52, "bar": "up" });
+db.post({ "_id": "foo12BarUp", "foo": 12, "bar": "up" });
+db.post({ "_id": "foo22BarDown", "foo": 22, "bar": "down" });
+db.post({ "_id": "foo32BarUp", "foo": 32, "bar": "up" });
+db.post({ "_id": "foo42BarDown", "foo": 42, "bar": "down" });
+db.post({ "_id": "foo52BarUp", "foo": 52, "bar": "up" });
 
-console.log("Query for exact matches on foo = 22");
-eqQuery("foo", 22);
+eqQuery("foo", 22).then((results) => {
+  console.log("Query for exact matches on foo = 22");
+  console.log(results);
+});
 
-console.log("Query for matches on foo >= 22");
-gteQuery("foo", 22);
+gteQuery("foo", 22).then((results) => {
+  console.log("Query for matches on foo >= 22");
+  console.log(results);
+});
 
-// A simple AND foo >= 22 and bar = up
+fooAndBar = async function () {
+  const fooIds = await gteQuery("foo", 22);
+  const barIds = new Set(await eqQuery("bar", "up"));
+
+  const intersection = fooIds.filter((x) => barIds.has(x));
+
+  return intersection;
+};
+fooAndBar().then((results) => {
+  console.log("A simple AND foo >= 22 and bar = up");
+  console.log(results);
+});
+
+fooOrBar = async function () {
+  const fooIds = await gteQuery("foo", 42);
+  const barIds = await eqQuery("bar", "up");
+
+  const union = new Set(fooIds);
+  barIds.forEach((x) => union.add(x));
+
+  return union;
+};
+fooOrBar().then((results) => {
+  console.log("A simple OR foo >= 42 OR bar = up");
+  console.log(results);
+});
