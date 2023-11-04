@@ -1,6 +1,11 @@
 {
+  "type": "module",
   "dependencies": {
     "pouchdb": "^8.0.1",
     "pouchdb-adapter-memory": "^8.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2",
+    "typescript-language-server": "^4.0.0"
   }
 }

@@ -1,0 +1,7 @@
+[language-server.ts-lsp]
+command = "npm"
+args = [ "exec", "-c", "typescript-language-server --stdio"]
+
+[[language]]
+name = "javascript"
+language-servers = [ "ts-lsp" ]

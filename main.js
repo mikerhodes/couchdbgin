@@ -89,8 +89,9 @@ function emit(key, value) {
 // map({ "a": ["zero", 1, "foo", true, 4, "last"] });
 // map(doc);
 
-var PouchDB = require("pouchdb");
-PouchDB.plugin(require("pouchdb-adapter-memory"));
+import PouchDB from "pouchdb";
+import MemoryAdapterPlugin from "pouchdb-adapter-memory";
+PouchDB.plugin(MemoryAdapterPlugin);
 
 var db = new PouchDB("kittens", { adapter: "memory" });
 
@@ -105,59 +106,12 @@ var ddoc = {
   },
 };
 // save it
-db.put(ddoc).then(function () {
-  // success!
-}).catch(function (err) {
-  // some error (maybe a 409, because it already exists?)
-});
+db.put(ddoc);
+db.put(doc);
 
-// eqPredicate queries our general index (gin) for
-// a field with a specific value. Use dotted field
-// for deep query. It assumes the "my_index/gin"
-// index above.
-eqPredicate = function (field, value) {
-  const self = this;
-  this.field = field;
-  this.value = value;
+import { eqPredicate, gtePredicate } from "./predicates.js";
 
-  this.execute = async function () {
-    const key = field.split(".").map((x) => fk(x));
-    key.push(value);
-
-    const res = await db.query("my_index/gin", {
-      key: key,
-    });
-    return res.rows.map((x) => x["id"]);
-  };
-};
-
-// gtePredicate can execute a greater-than-or-equal-to
-// query on the database. It assumes the "my_index/gin"
-// index above.
-gtePredicate = function (field, value) {
-  const self = this;
-  this.field = field;
-  this.value = value;
-
-  this.execute = async function () {
-    startkey = field.split(".").map((x) => fk(x));
-    startkey.push(value);
-    endkey = field.split(".").map((x) => fk(x));
-    endkey.push({});
-
-    const res = await db.query("my_index/gin", {
-      startkey: startkey,
-      endkey: endkey,
-    });
-    return res.rows.map((x) => x["id"]);
-  };
-};
-
-db.put(doc).catch((ex) => {
-  console.log(ex.status);
-});
-
-(new eqPredicate("person.name.second", "rhodes")).execute().then((people) => {
+(new eqPredicate("person.name.second", "rhodes")).execute(db).then((people) => {
   console.log("Query for exact matches on the Rhodes family");
   console.log(people);
 });
@@ -169,12 +123,12 @@ db.post({ "_id": "foo32BarUp", "foo": 32, "bar": "up" });
 db.post({ "_id": "foo42BarDown", "foo": 42, "bar": "down" });
 db.post({ "_id": "foo52BarUp", "foo": 52, "bar": "up" });
 
-(new eqPredicate("foo", 22)).execute().then((results) => {
+(new eqPredicate("foo", 22)).execute(db).then((results) => {
   console.log("Query for exact matches on foo = 22");
   console.log(results);
 });
 
-(new gtePredicate("foo", 22)).execute().then((results) => {
+(new gtePredicate("foo", 22)).execute(db).then((results) => {
   console.log("Query for matches on foo >= 22");
   console.log(results);
 });
@@ -182,31 +136,34 @@ db.post({ "_id": "foo52BarUp", "foo": 52, "bar": "up" });
 //
 // AND
 //
-and = function (...preds) {
-  const self = this;
-  this.preds = preds;
-  this.execute = async function () {
-    const preds = self.preds;
-    if (preds.length == 0) {
-      return [];
-    } else {
-      let intersection = await preds[0].execute();
-      for (const pred of preds.slice(1)) {
-        if (intersection.length == 0) {
-          // bail early, no chance of results
-          return intersection;
+class And {
+  constructor(...preds) {
+    const self = this;
+    this.preds = preds;
+    this.execute = async function (db) {
+      const preds = self.preds;
+      if (preds.length == 0) {
+        return [];
+      } else {
+        let intersection = await preds[0].execute(db);
+        for (const pred of preds.slice(1)) {
+          if (intersection.length == 0) {
+            // bail early, no chance of results
+            return intersection;
+          }
+          const newIds = new Set(await pred.execute(db));
+          intersection = intersection.filter((x) => newIds.has(x));
         }
-        const newIds = new Set(await pred.execute());
-        intersection = intersection.filter((x) => newIds.has(x));
+        return intersection;
       }
-      return intersection;
-    }
-  };
-};
-(new and(
+    };
+  }
+}
+
+(new And(
   new gtePredicate("foo", 22),
   new eqPredicate("bar", "up"),
-)).execute().then((results) => {
+)).execute(db).then((results) => {
   console.log("A simple AND foo >= 22 and bar = up");
   console.log(results.sort());
 });
@@ -214,21 +171,23 @@ and = function (...preds) {
 //
 // OR
 //
-or = function (...preds) {
-  const self = this;
-  this.preds = preds;
-  this.execute = async function () {
-    const union = new Set();
-    for (const pred of self.preds) {
-      (await pred.execute()).forEach((id) => union.add(id));
-    }
-    return Array.from(union);
-  };
-};
-(new or(
+class Or {
+  constructor(...preds) {
+    const self = this;
+    this.preds = preds;
+    this.execute = async function (db) {
+      const union = new Set();
+      for (const pred of self.preds) {
+        (await pred.execute(db)).forEach((id) => union.add(id));
+      }
+      return Array.from(union);
+    };
+  }
+}
+(new Or(
   new gtePredicate("foo", 42),
   new eqPredicate("bar", "up"),
-)).execute().then((results) => {
+)).execute(db).then((results) => {
   console.log("A simple OR foo >= 42 OR bar = up");
   console.log(results.sort());
 });
@@ -236,16 +195,16 @@ or = function (...preds) {
 //
 // Multi-clause query
 //
-(new and(
-  new or(
+(new And(
+  new Or(
     new gtePredicate("foo", 42),
     new eqPredicate("bar", "up"),
   ),
-  new and(
+  new And(
     new gtePredicate("foo", 22),
     new eqPredicate("bar", "up"),
   ),
-)).execute().then((results) => {
+)).execute(db).then((results) => {
   console.log("(foo >= 42 OR bar = up) AND (foo >= 22 AND bar = up)");
   console.log(results);
 });
