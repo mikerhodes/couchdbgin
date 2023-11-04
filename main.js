@@ -1,18 +1,3 @@
-const doc = {
-  "_id": "234-23423-efsd-234",
-  "person": {
-    "age": 12,
-    "name": { "first": "mike", "second": "rhodes", "words": true },
-  },
-  "address": {
-    "number": 12,
-    "firstline": "foo road",
-    "secondline": "fooland",
-    "postcode": "foo 123",
-  },
-  "pets": ["alice", "bob", "eve"],
-};
-
 // fk creates a "field key" for the index, which is an
 // object that sorts after any values a matching field
 // prefix may have.
@@ -89,6 +74,9 @@ function emit(key, value) {
 // map({ "a": ["zero", 1, "foo", true, 4, "last"] });
 // map(doc);
 
+import test from "node:test";
+import assert from "node:assert";
+
 import PouchDB from "pouchdb";
 import MemoryAdapterPlugin from "pouchdb-adapter-memory";
 PouchDB.plugin(MemoryAdapterPlugin);
@@ -107,104 +95,107 @@ var ddoc = {
 };
 // save it
 db.put(ddoc);
-db.put(doc);
 
-import { eqPredicate, gtePredicate } from "./predicates.js";
+import { And, eqPredicate, gtePredicate, Or } from "./predicates.js";
 
-(new eqPredicate("person.name.second", "rhodes")).execute(db).then((people) => {
-  console.log("Query for exact matches on the Rhodes family");
-  console.log(people);
+test("people", async (t) => {
+  await db.put({
+    "_id": "234-23423-efsd-234",
+    "person": {
+      "age": 12,
+      "name": { "first": "mike", "second": "rhodes", "words": true },
+    },
+    "address": {
+      "number": 12,
+      "firstline": "foo road",
+      "secondline": "fooland",
+      "postcode": "foo 123",
+    },
+    "pets": ["alice", "bob", "eve"],
+  });
+
+  await t.test("person.name.second = rhodes", async (t) => {
+    const expected = ["234-23423-efsd-234"];
+    const got = await (new eqPredicate("person.name.second", "rhodes")).execute(
+      db,
+    );
+    assert.deepEqual(got.sort(), expected);
+  });
+
+  await t.test("person.name.first = rhodes", async (t) => {
+    const expected = [];
+    const got = await (new eqPredicate("person.name.first", "rhodes")).execute(
+      db,
+    );
+    assert.deepEqual(got.sort(), expected);
+  });
 });
 
-db.post({ "_id": "foo12BarUp", "foo": 12, "bar": "up" });
-db.post({ "_id": "foo22BarDown", "foo": 22, "bar": "down" });
-db.post({ "_id": "foo22BarUp", "foo": 22, "bar": "up" });
-db.post({ "_id": "foo32BarUp", "foo": 32, "bar": "up" });
-db.post({ "_id": "foo42BarDown", "foo": 42, "bar": "down" });
-db.post({ "_id": "foo52BarUp", "foo": 52, "bar": "up" });
+test("foo bar tests", async (t) => {
+  await db.post({ "_id": "foo12BarUp", "foo": 12, "bar": "up" });
+  await db.post({ "_id": "foo22BarDown", "foo": 22, "bar": "down" });
+  await db.post({ "_id": "foo22BarUp", "foo": 22, "bar": "up" });
+  await db.post({ "_id": "foo32BarUp", "foo": 32, "bar": "up" });
+  await db.post({ "_id": "foo42BarDown", "foo": 42, "bar": "down" });
+  await db.post({ "_id": "foo52BarUp", "foo": 52, "bar": "up" });
 
-(new eqPredicate("foo", 22)).execute(db).then((results) => {
-  console.log("Query for exact matches on foo = 22");
-  console.log(results);
-});
+  await t.test("foo = 22", async (t) => {
+    const expected = ["foo22BarDown", "foo22BarUp"];
+    const got = await (new eqPredicate("foo", 22)).execute(db);
+    assert.deepEqual(got.sort(), expected);
+  });
 
-(new gtePredicate("foo", 22)).execute(db).then((results) => {
-  console.log("Query for matches on foo >= 22");
-  console.log(results);
-});
+  await t.test("foo >= 22", async (t) => {
+    const expected = [
+      "foo22BarDown",
+      "foo22BarUp",
+      "foo32BarUp",
+      "foo42BarDown",
+      "foo52BarUp",
+    ];
+    const got = await (new gtePredicate("foo", 22)).execute(db);
+    assert.deepEqual(got.sort(), expected);
+  });
 
-//
-// AND
-//
-class And {
-  constructor(...preds) {
-    const self = this;
-    this.preds = preds;
-    this.execute = async function (db) {
-      const preds = self.preds;
-      if (preds.length == 0) {
-        return [];
-      } else {
-        let intersection = await preds[0].execute(db);
-        for (const pred of preds.slice(1)) {
-          if (intersection.length == 0) {
-            // bail early, no chance of results
-            return intersection;
-          }
-          const newIds = new Set(await pred.execute(db));
-          intersection = intersection.filter((x) => newIds.has(x));
-        }
-        return intersection;
-      }
-    };
-  }
-}
+  await t.test("basic AND test", async (t) => {
+    const expected = ["foo22BarUp", "foo32BarUp", "foo52BarUp"];
+    const got = await (new And(
+      new gtePredicate("foo", 22),
+      new eqPredicate("bar", "up"),
+    )).execute(db);
+    assert.deepEqual(got.sort(), expected);
+  });
 
-(new And(
-  new gtePredicate("foo", 22),
-  new eqPredicate("bar", "up"),
-)).execute(db).then((results) => {
-  console.log("A simple AND foo >= 22 and bar = up");
-  console.log(results.sort());
-});
+  await t.test("a simple OR foo >= 42 OR bar = up", async (t) => {
+    const expected = [
+      "foo12BarUp",
+      "foo22BarUp",
+      "foo32BarUp",
+      "foo42BarDown",
+      "foo52BarUp",
+    ];
+    const got = await (new Or(
+      new gtePredicate("foo", 42),
+      new eqPredicate("bar", "up"),
+    )).execute(db);
+    assert.deepEqual(got.sort(), expected);
+  });
 
-//
-// OR
-//
-class Or {
-  constructor(...preds) {
-    const self = this;
-    this.preds = preds;
-    this.execute = async function (db) {
-      const union = new Set();
-      for (const pred of self.preds) {
-        (await pred.execute(db)).forEach((id) => union.add(id));
-      }
-      return Array.from(union);
-    };
-  }
-}
-(new Or(
-  new gtePredicate("foo", 42),
-  new eqPredicate("bar", "up"),
-)).execute(db).then((results) => {
-  console.log("A simple OR foo >= 42 OR bar = up");
-  console.log(results.sort());
-});
-
-//
-// Multi-clause query
-//
-(new And(
-  new Or(
-    new gtePredicate("foo", 42),
-    new eqPredicate("bar", "up"),
-  ),
-  new And(
-    new gtePredicate("foo", 22),
-    new eqPredicate("bar", "up"),
-  ),
-)).execute(db).then((results) => {
-  console.log("(foo >= 42 OR bar = up) AND (foo >= 22 AND bar = up)");
-  console.log(results);
+  //
+  // Multi-clause query
+  //
+  await t.test("(foo >= 42 OR bar = up) AND (foo >= 22 AND bar = up)", async (t) => {
+    const expected = ["foo52BarUp", "foo22BarUp", "foo32BarUp"];
+    const got = await (new And(
+      new Or(
+        new gtePredicate("foo", 42),
+        new eqPredicate("bar", "up"),
+      ),
+      new And(
+        new gtePredicate("foo", 22),
+        new eqPredicate("bar", "up"),
+      ),
+    )).execute(db);
+    assert.deepEqual(got, expected);
+  });
 });

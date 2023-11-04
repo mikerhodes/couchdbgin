@@ -51,3 +51,47 @@ export class gtePredicate {
     };
   }
 }
+
+//
+// AND
+//
+export class And {
+  constructor(...preds) {
+    const self = this;
+    this.preds = preds;
+    this.execute = async function (db) {
+      const preds = self.preds;
+      if (preds.length == 0) {
+        return [];
+      } else {
+        let intersection = await preds[0].execute(db);
+        for (const pred of preds.slice(1)) {
+          if (intersection.length == 0) {
+            // bail early, no chance of results
+            return intersection;
+          }
+          const newIds = new Set(await pred.execute(db));
+          intersection = intersection.filter((x) => newIds.has(x));
+        }
+        return intersection;
+      }
+    };
+  }
+}
+
+//
+// OR
+//
+export class Or {
+  constructor(...preds) {
+    const self = this;
+    this.preds = preds;
+    this.execute = async function (db) {
+      const union = new Set();
+      for (const pred of self.preds) {
+        (await pred.execute(db)).forEach((id) => union.add(id));
+      }
+      return Array.from(union);
+    };
+  }
+}
